@@ -1,0 +1,61 @@
+# .distignore — files excluded from the release zip.
+# Follows mikezielonkadotcom/wp-github-plugin-actions release standards.
+#
+# Critical invariants for this plugin:
+#   - KEEP build/                — compiled JS/CSS; block won't register without it
+#   - KEEP src/**/*.php          — render.php lives here
+#   - KEEP includes/*.php        — PHP classes (plugin, settings, rest, cli)
+#   - KEEP scrt-link-wp.php      — main file
+#   - KEEP readme.txt, README.md, LICENSE
+#   - SKIP src/**/*.js,.scss,.css — source; compiled into build/
+#   - SKIP dev/                  — local-dev mu-plugins only (Mailpit bridge)
+#   - SKIP .wp-env.json          — local dev env config
+#   - SKIP node_modules/         — huge, unnecessary
+#   - SKIP .git, .github         — version control + CI config
+#   - SKIP composer.json         — (we don't ship one, but defend anyway — see release standards)
+
+# Version control & CI
+/.git
+/.github
+/.gitignore
+/.gitattributes
+
+# Build tools & dependencies
+/node_modules
+/vendor
+/composer.json
+/composer.lock
+/package.json
+/package-lock.json
+*.map
+
+# Entire /src — pure source tree. render.php + block.json are authored here
+# but @wordpress/scripts copies them into /build at build time, so /build is
+# the only path our runtime references. (This differs from plugins that
+# autoload PHP classes from /src — for those, drop `/src` and use the
+# granular */src/**/*.{js,scss,...} patterns instead.)
+/src
+
+# Local dev scaffolding (Mailpit bridge, wp-env config, etc.)
+/dev
+/.wp-env.json
+
+# Tests & coverage (none yet, but declared for safety)
+/tests
+/phpunit.xml
+/phpunit.xml.dist
+/.phpunit.result.cache
+
+# IDE/OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.claude/
+.gstack/
+
+# Build artifacts & release leftovers
+*.zip
+/release
+/release-build
+/.distignore

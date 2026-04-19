@@ -1,0 +1,152 @@
+# Tag-triggered release. Builds the plugin zip and creates a GitHub Release
+# with the zip attached (Git Updater pulls this asset on self-update).
+#
+# Logic inlined from mikezielonkadotcom/wp-github-plugin-actions
+# (wordpress-plugin-release.yml) — kept local because the source repo is
+# private and public repos can't call private reusable workflows.
+# When the source repo is updated, re-apply any useful deltas here.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Plugin slug (optional, auto-detected from main PHP file)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine plugin metadata
+        id: meta
+        shell: bash
+        run: |
+          SLUG="${{ inputs.slug }}"
+          if [ -z "$SLUG" ]; then
+            PLUGIN_FILE=$(find . -maxdepth 1 -name "*.php" -type f ! -name "uninstall.php" | head -1)
+            if [ -n "$PLUGIN_FILE" ]; then
+              SLUG=$(basename "$PLUGIN_FILE" .php)
+            else
+              SLUG="$(basename "$GITHUB_REPOSITORY")"
+            fi
+          fi
+
+          if [[ "$GITHUB_REF" =~ refs/tags/v(.+) ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+          else
+            VERSION="dev"
+          fi
+
+          echo "slug=$SLUG"       >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Using slug: $SLUG (version: $VERSION)"
+
+      - name: Validate plugin structure
+        run: |
+          SLUG="${{ steps.meta.outputs.slug }}"
+          if [ ! -f "$SLUG.php" ]; then
+            echo "::error::Main plugin file $SLUG.php not found!"
+            exit 1
+          fi
+          echo "✓ $SLUG.php present"
+
+      - name: Setup Node.js
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Build frontend assets
+        if: hashFiles('package.json') != ''
+        run: |
+          npm ci
+          npm run build:prod 2>/dev/null || npm run build 2>/dev/null || npm run prod 2>/dev/null || echo "No build script, skipping"
+
+      - name: Prepare release directory
+        run: |
+          rm -rf release
+          mkdir -p "release/${{ steps.meta.outputs.slug }}"
+
+      - name: Copy plugin files
+        shell: bash
+        run: |
+          set -e
+          SLUG="${{ steps.meta.outputs.slug }}"
+          DEST="release/$SLUG"
+
+          if [ -f ".distignore" ]; then
+            echo "Using .distignore"
+            rsync -av --exclude-from='.distignore' --exclude='release/' ./ "$DEST/"
+          else
+            echo "::error::.distignore missing — refusing to build a release without one"
+            exit 1
+          fi
+
+          find "$DEST" -name ".DS_Store" -delete 2>/dev/null || true
+          find "$DEST" -name "Thumbs.db"  -delete 2>/dev/null || true
+          echo "✓ Files copied"
+
+      - name: Validate release contents
+        run: |
+          SLUG="${{ steps.meta.outputs.slug }}"
+          DEST="release/$SLUG"
+
+          # Hard invariants per wp-github-plugin-actions release standards.
+          fail() { echo "::error::$1"; exit 1; }
+          [ -f "$DEST/$SLUG.php" ]                            || fail "main plugin file missing"
+          [ -d "$DEST/build" ]                                || fail "build/ missing (block won't register)"
+          [ -f "$DEST/build/scrt-request/block.json" ]        || fail "build/scrt-request/block.json missing"
+          [ -f "$DEST/build/scrt-request/render.php" ]        || fail "build/scrt-request/render.php missing"
+          [ -f "$DEST/build/scrt-request/view.js" ]           || fail "build/scrt-request/view.js missing"
+          [ -d "$DEST/includes" ]                             || fail "includes/ missing"
+          [ -f "$DEST/includes/class-rest.php" ]              || fail "includes/class-rest.php missing"
+          [ -f "$DEST/includes/class-cli.php" ]               || fail "includes/class-cli.php missing"
+          [ -f "$DEST/readme.txt" ]                           || fail "readme.txt missing"
+          [ ! -f "$DEST/composer.json" ]                      || fail "composer.json leaked into release (WSOD risk on managed hosts)"
+          [ ! -d "$DEST/node_modules" ]                       || fail "node_modules leaked into release"
+          [ ! -d "$DEST/dev" ]                                || fail "dev/ leaked into release"
+          echo "✓ Release contents validated"
+
+      - name: Create ZIP
+        working-directory: release
+        run: |
+          SLUG="${{ steps.meta.outputs.slug }}"
+          zip -r "$SLUG.zip" "$SLUG" -x "*.DS_Store" "*.Thumbs.db"
+          echo "— zip contents (top 20) —"
+          unzip -l "$SLUG.zip" | head -20
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.slug }}-${{ steps.meta.outputs.version }}.zip
+          path: release/${{ steps.meta.outputs.slug }}.zip
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ steps.meta.outputs.slug }} v${{ steps.meta.outputs.version }}
+          files: release/${{ steps.meta.outputs.slug }}.zip
+          generate_release_notes: true
+          make_latest: true
+          draft: false
+          prerelease: false

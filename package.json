@@ -1,0 +1,47 @@
+{
+  "name": "scrt-link-wp",
+  "version": "0.1.0",
+  "description": "WordPress plugin providing a Gutenberg block that creates end-to-end encrypted, self-destructing secret submissions via scrt.link.",
+  "license": "GPL-2.0-or-later",
+  "author": "Mike Zielonka",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mikezielonkadotcom/scrt-link-wp.git"
+  },
+  "scripts": {
+    "build": "wp-scripts build --experimental-modules",
+    "start": "wp-scripts start --experimental-modules",
+    "format": "wp-scripts format",
+    "lint:js": "wp-scripts lint-js",
+    "lint:css": "wp-scripts lint-style",
+    "packages-update": "wp-scripts packages-update",
+    "plugin-zip": "wp-scripts plugin-zip",
+    "env": "wp-env",
+    "env:start": "wp-env start",
+    "env:stop": "wp-env stop",
+    "env:destroy": "wp-env destroy",
+    "env:cli": "wp-env run cli wp",
+    "env:logs": "wp-env logs",
+    "env:open": "open http://localhost:8888/wp-admin/"
+  },
+  "devDependencies": {
+    "@wordpress/env": "^10.39.0",
+    "@wordpress/scripts": "^30.0.0"
+  },
+  "wpPlugin": {
+    "name": "scrt-link-wp",
+    "scriptGlobal": "scrtLinkWp",
+    "packageNamespace": "scrt-link-wp",
+    "handlePrefix": "scrt-link-wp",
+    "externalNamespaces": {},
+    "pages": []
+  },
+  "files": [
+    "scrt-link-wp.php",
+    "uninstall.php",
+    "readme.txt",
+    "includes/",
+    "blocks/",
+    "build/"
+  ]
+}

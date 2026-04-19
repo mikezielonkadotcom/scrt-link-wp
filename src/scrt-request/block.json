@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schemas.wp.org/trunk/block.json",
+  "apiVersion": 3,
+  "name": "scrt-link-wp/scrt-request",
+  "version": "0.1.0",
+  "title": "Send me a secret",
+  "category": "widgets",
+  "icon": "lock",
+  "description": "End-to-end encrypted, self-destructing message form powered by scrt.link.",
+  "keywords": [ "scrt.link", "secret", "encryption", "privacy", "contact" ],
+  "textdomain": "scrt-link-wp",
+  "supports": {
+    "html": false,
+    "align": [ "wide", "full" ],
+    "spacing": { "margin": true, "padding": true, "blockGap": true },
+    "color": { "background": true, "text": true, "link": true },
+    "typography": { "fontSize": true, "lineHeight": true },
+    "interactivity": true
+  },
+  "attributes": {
+    "heading":         { "type": "string", "default": "Send me a secret" },
+    "description":     { "type": "string", "default": "Your message will be encrypted in your browser and delivered as a one-time, self-destructing link. Nothing is stored in plaintext." },
+    "submitLabel":     { "type": "string", "default": "Encrypt & send" },
+    "successMessage":  { "type": "string", "default": "Your message was sent securely. The recipient will be notified." },
+    "placeholder":     { "type": "string", "default": "Type the secret you want to send…" },
+    "allowPublicNote": { "type": "boolean", "default": true },
+    "allowPassword":   { "type": "boolean", "default": false },
+    "expiresIn":       { "type": "number", "default": 0 }
+  },
+  "editorScript": "file:./index.js",
+  "editorStyle":  "file:./index.css",
+  "style":        "file:./style-index.css",
+  "viewScriptModule": "file:./view.js",
+  "render":       "file:./render.php"
+}

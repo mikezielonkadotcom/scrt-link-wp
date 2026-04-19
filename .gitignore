@@ -1,0 +1,9 @@
+node_modules/
+build/
+vendor/
+*.log
+.DS_Store
+.idea/
+.vscode/
+.phpunit.result.cache
+.gstack/

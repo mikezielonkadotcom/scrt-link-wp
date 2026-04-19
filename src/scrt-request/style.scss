@@ -1,0 +1,64 @@
+.scrt-link-wp-request {
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+
+	&__form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	&__field {
+		display: block;
+	}
+
+	&__textarea,
+	&__note,
+	&__password {
+		width: 100%;
+		padding: 0.75rem;
+		border: 1px solid currentColor;
+		border-radius: 0.375rem;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		box-sizing: border-box;
+	}
+
+	&__textarea {
+		resize: vertical;
+		min-height: 8rem;
+	}
+
+	&__submit {
+		cursor: pointer;
+
+		&:disabled {
+			cursor: progress;
+			opacity: 0.7;
+		}
+	}
+
+	&__error {
+		color: #b91c1c;
+		margin: 0;
+	}
+
+	&__success {
+		padding: 1rem;
+		border: 1px solid currentColor;
+		border-radius: 0.375rem;
+		margin: 0;
+	}
+
+	&.is-busy {
+		pointer-events: none;
+	}
+
+	&--unconfigured {
+		padding: 1rem;
+		border: 1px dashed currentColor;
+		border-radius: 0.375rem;
+	}
+}
