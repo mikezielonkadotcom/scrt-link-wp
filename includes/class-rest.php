@@ -109,6 +109,18 @@ final class Rest {
 			return new \WP_Error( 'scrt_link_bad_request', __( 'Missing ciphertext, checksum, or secret id.', 'scrt-link-wp' ), [ 'status' => 400 ] );
 		}
 
+		/**
+		 * Reject oversized bodies before spending an upstream call. scrt.link ciphertext
+		 * is small in practice; cap the whole JSON body to keep an attacker from tying up
+		 * the site's quota (and inbox) with megabyte payloads. Filterable for edge cases.
+		 *
+		 * @param int $max_body_bytes Maximum accepted request body size in bytes.
+		 */
+		$max_body_bytes = (int) apply_filters( 'scrt_link_wp_max_body_bytes', 65536 );
+		if ( strlen( $body_json ) > $max_body_bytes ) {
+			return new \WP_Error( 'scrt_link_bad_request', __( 'Payload too large.', 'scrt-link-wp' ), [ 'status' => 413 ] );
+		}
+
 		if ( ! preg_match( '/^[A-Za-z0-9$~\-_.]{20,64}$/', $secret_id ) ) {
 			return new \WP_Error( 'scrt_link_bad_request', __( 'Invalid secret id.', 'scrt-link-wp' ), [ 'status' => 400 ] );
 		}
@@ -116,6 +128,12 @@ final class Rest {
 		$decoded = json_decode( $body_json, true );
 		if ( ! is_array( $decoded ) || empty( $decoded['secretIdHash'] ) || empty( $decoded['content'] ) ) {
 			return new \WP_Error( 'scrt_link_bad_request', __( 'Malformed payload.', 'scrt-link-wp' ), [ 'status' => 400 ] );
+		}
+
+		// Enforce the client's publicNote cap (140, see maxlength in render.php) server-side.
+		// The note is emailed to the owner verbatim, so bound it before the upstream call.
+		if ( isset( $decoded['publicNote'] ) && mb_strlen( (string) $decoded['publicNote'] ) > 140 ) {
+			return new \WP_Error( 'scrt_link_bad_request', __( 'Note is too long.', 'scrt-link-wp' ), [ 'status' => 400 ] );
 		}
 
 		$resp_body = Plugin::post_to_upstream( $body_json, $checksum );
@@ -249,9 +267,28 @@ final class Rest {
 			return true;
 		}
 
+		// Global/site-wide cap, checked in addition to (and before) the per-IP bucket.
+		// The per-IP limiter alone is defeated by IP rotation or by many visitors
+		// collapsed behind a single CDN egress IP; this caps total accepted requests
+		// site-wide per hour so the owner's upstream quota and inbox can't be drained.
+		/**
+		 * Filter the site-wide hourly cap on accepted submissions.
+		 *
+		 * @param int $global_limit Max accepted requests site-wide per hour.
+		 */
+		$global_limit   = max( 1, (int) apply_filters( 'scrt_link_wp_global_rate_limit', 100 ) );
+		$global_key     = 'scrt_link_wp_rl_global';
+		$global_count   = (int) get_transient( $global_key );
+		if ( $global_count >= $global_limit ) {
+			return false;
+		}
+
 		$limit = max( 1, (int) Plugin::get_option( 'rate_limit' ) );
 		if ( '' === $ip ) {
-			return true; // fail open — don't block if we can't identify
+			// Can't identify the client for a per-IP bucket, but the request still
+			// counts against the global cap so an unidentifiable flood is bounded.
+			set_transient( $global_key, $global_count + 1, HOUR_IN_SECONDS );
+			return true;
 		}
 
 		$key   = 'scrt_link_wp_rl_' . md5( $ip );
@@ -262,12 +299,134 @@ final class Rest {
 		}
 
 		set_transient( $key, $count + 1, HOUR_IN_SECONDS );
+		set_transient( $global_key, $global_count + 1, HOUR_IN_SECONDS );
 		return true;
 	}
 
+	/**
+	 * Resolve the client IP for rate-limiting buckets.
+	 *
+	 * REMOTE_ADDR is the only value we can trust unconditionally. Forwarded headers
+	 * (CF-Connecting-IP, X-Forwarded-For) are attacker-controllable and MUST NOT be
+	 * honored blindly — doing so would let anyone mint unlimited per-IP buckets by
+	 * spoofing the header. We only read them when the request demonstrably arrived
+	 * through the CDN: either REMOTE_ADDR is inside a published Cloudflare range, or
+	 * the site owner explicitly opts in via the `scrt_link_wp_trust_proxy_headers`
+	 * filter (for other reverse proxies, e.g. BigScoots' front layer).
+	 *
+	 * IPv6 addresses are aggregated to their /64 prefix so a single allocation can't
+	 * cycle through 2^64 addresses to defeat the per-IP limit.
+	 */
 	private function client_ip(): string {
-		$raw = isset( $_SERVER['REMOTE_ADDR'] ) ? wp_unslash( $_SERVER['REMOTE_ADDR'] ) : '';
-		$ip  = filter_var( $raw, FILTER_VALIDATE_IP );
-		return $ip ?: '';
+		$remote = isset( $_SERVER['REMOTE_ADDR'] ) ? filter_var( wp_unslash( $_SERVER['REMOTE_ADDR'] ), FILTER_VALIDATE_IP ) : false;
+		$remote = $remote ?: '';
+
+		$candidate = $remote;
+
+		$trust_proxy = (bool) apply_filters( 'scrt_link_wp_trust_proxy_headers', false );
+		if ( '' !== $remote && ( $trust_proxy || $this->is_cloudflare_ip( $remote ) ) ) {
+			// Prefer Cloudflare's single-IP header; fall back to the left-most XFF entry.
+			$cf = isset( $_SERVER['HTTP_CF_CONNECTING_IP'] ) ? filter_var( wp_unslash( $_SERVER['HTTP_CF_CONNECTING_IP'] ), FILTER_VALIDATE_IP ) : false;
+			if ( $cf ) {
+				$candidate = $cf;
+			} elseif ( isset( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
+				$parts = explode( ',', (string) wp_unslash( $_SERVER['HTTP_X_FORWARDED_FOR'] ) );
+				$first = filter_var( trim( (string) reset( $parts ) ), FILTER_VALIDATE_IP );
+				if ( $first ) {
+					$candidate = $first;
+				}
+			}
+		}
+
+		if ( '' === $candidate ) {
+			return '';
+		}
+
+		// Aggregate IPv6 to /64 so one allocation maps to one bucket.
+		if ( filter_var( $candidate, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 ) ) {
+			$packed = @inet_pton( $candidate );
+			if ( false !== $packed && strlen( $packed ) === 16 ) {
+				return 'v6/64:' . bin2hex( substr( $packed, 0, 8 ) );
+			}
+		}
+
+		return $candidate;
+	}
+
+	/**
+	 * Whether an IP falls inside Cloudflare's published IPv4/IPv6 ranges. Used to
+	 * decide if CF-Connecting-IP / X-Forwarded-For can be trusted for this request.
+	 * List per https://www.cloudflare.com/ips/ (filterable in case ranges change).
+	 */
+	private function is_cloudflare_ip( string $ip ): bool {
+		$ranges = (array) apply_filters(
+			'scrt_link_wp_cloudflare_ranges',
+			[
+				'173.245.48.0/20',
+				'103.21.244.0/22',
+				'103.22.200.0/22',
+				'103.31.4.0/22',
+				'141.101.64.0/18',
+				'108.162.192.0/18',
+				'190.93.240.0/20',
+				'188.114.96.0/20',
+				'197.234.240.0/22',
+				'198.41.128.0/17',
+				'162.158.0.0/15',
+				'104.16.0.0/13',
+				'104.24.0.0/14',
+				'172.64.0.0/13',
+				'131.0.72.0/22',
+				'2400:cb00::/32',
+				'2606:4700::/32',
+				'2803:f800::/32',
+				'2405:b500::/32',
+				'2405:8100::/32',
+				'2a06:98c0::/29',
+				'2c0f:f248::/32',
+			]
+		);
+
+		foreach ( $ranges as $range ) {
+			if ( $this->ip_in_cidr( $ip, (string) $range ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Test whether an IP is contained in a CIDR range (IPv4 or IPv6).
+	 */
+	private function ip_in_cidr( string $ip, string $cidr ): bool {
+		if ( false === strpos( $cidr, '/' ) ) {
+			return false;
+		}
+		list( $subnet, $bits ) = explode( '/', $cidr, 2 );
+		$bits = (int) $bits;
+
+		$ip_bin     = @inet_pton( $ip );
+		$subnet_bin = @inet_pton( $subnet );
+		if ( false === $ip_bin || false === $subnet_bin || strlen( $ip_bin ) !== strlen( $subnet_bin ) ) {
+			return false; // different families or malformed
+		}
+
+		$bytes = intdiv( $bits, 8 );
+		$rem   = $bits % 8;
+
+		if ( $bytes > 0 && 0 !== substr_compare( $ip_bin, substr( $subnet_bin, 0, $bytes ), 0, $bytes ) ) {
+			return false;
+		}
+
+		if ( $rem > 0 ) {
+			$mask     = chr( 0xff << ( 8 - $rem ) & 0xff );
+			$ip_byte  = isset( $ip_bin[ $bytes ] ) ? ord( $ip_bin[ $bytes ] ) : 0;
+			$sub_byte = isset( $subnet_bin[ $bytes ] ) ? ord( $subnet_bin[ $bytes ] ) : 0;
+			if ( ( $ip_byte & ord( $mask ) ) !== ( $sub_byte & ord( $mask ) ) ) {
+				return false;
+			}
+		}
+
+		return true;
 	}
 }

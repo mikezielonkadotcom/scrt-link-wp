@@ -42,7 +42,6 @@ $context = [
 	'password'       => '',
 	'errorMessage'   => '',
 	'expiresIn'      => $expires_in,
-	'nonce'          => wp_create_nonce( 'wp_rest' ),
 	'restSubmitUrl'  => esc_url_raw( rest_url( 'scrt-link/v1/submit' ) ),
 	'restConfigUrl'  => esc_url_raw( rest_url( 'scrt-link/v1/config' ) ),
 	'labelRequired'  => __( 'Please enter a message before sending.', 'scrt-link-wp' ),
