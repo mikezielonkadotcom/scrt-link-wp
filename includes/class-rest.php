@@ -64,18 +64,34 @@ final class Rest {
 		//   1. Content is end-to-end encrypted client-side before it reaches this
 		//      endpoint (nothing sensitive for an attacker to steal).
 		//   2. Per-IP rate limit (see check_rate_limit) caps abuse.
-		//   3. Origin-header check below rejects cross-origin POSTs from other sites.
+		//   3. Origin-header check below requires a same-origin Origin header and
+		//      fails closed when it is missing or mismatched (filterable below).
 		//   4. The scrt.link API key never leaves PHP; attackers can only burn the
 		//      site owner's upstream quota, which is further rate-limited by scrt.link.
 		if ( ! Plugin::get_option( 'api_key' ) ) {
 			return new \WP_Error( 'scrt_link_not_configured', __( 'scrt.link plugin has not been configured.', 'scrt-link-wp' ), [ 'status' => 503 ] );
 		}
 
+		/**
+		 * Filter whether a same-origin Origin header is required (fail-closed).
+		 *
+		 * Browsers always send Origin on POSTs, so a missing header means a
+		 * non-browser client. Return false only if a legitimate non-browser
+		 * integration needs to POST to this endpoint without an Origin header.
+		 *
+		 * @param bool $require_origin True by default (missing Origin is rejected).
+		 */
+		$require_origin = (bool) apply_filters( 'scrt_link_wp_require_origin', true );
+
 		$origin = (string) $request->get_header( 'origin' );
-		if ( '' !== $origin ) {
+		if ( '' === $origin ) {
+			if ( $require_origin ) {
+				return new \WP_Error( 'rest_forbidden_origin', __( 'Submissions must include a same-origin Origin header.', 'scrt-link-wp' ), [ 'status' => 403 ] );
+			}
+		} else {
 			$site_host   = wp_parse_url( home_url(), PHP_URL_HOST );
 			$origin_host = wp_parse_url( $origin, PHP_URL_HOST );
-			if ( $site_host && $origin_host && 0 !== strcasecmp( $site_host, $origin_host ) ) {
+			if ( ! $site_host || ! $origin_host || 0 !== strcasecmp( $site_host, $origin_host ) ) {
 				return new \WP_Error( 'rest_forbidden_origin', __( 'Cross-origin submissions are not permitted.', 'scrt-link-wp' ), [ 'status' => 403 ] );
 			}
 		}
